@@ -126,16 +126,32 @@ def get_progress_summary():
         return {}
 
 def initialize_domain_tracking(resume=True):
-    """Initialize thread-safe tracking for each domain"""
-    for site in TARGET_SITES:
-        domain = site['domain']
+    """Initialize domain tracking with thread-safe visited sets"""
+    global visited_sets, visited_locks
+    
+    visited_sets = {}
+    visited_locks = {}
+    
+    for site_config in TARGET_SITES:
+        domain = site_config['domain']
+        visited_sets[domain] = set()
         visited_locks[domain] = threading.Lock()
         
         if resume:
-            # Load existing progress
-            visited_urls, _ = load_progress(domain)
-            visited_sets[domain] = visited_urls
-            logger.info(f"Resuming crawl for {domain}: {len(visited_urls)} URLs already crawled")
+            # Load existing progress from file
+            existing_visited, _ = load_progress(domain)
+            visited_sets[domain].update(existing_visited)
+            
+            # Also load existing URLs from database
+            from crawler.db import get_existing_urls_for_domain
+            db_urls = get_existing_urls_for_domain(domain)
+            visited_sets[domain].update(db_urls)
+            
+            total_urls = len(visited_sets[domain])
+            if total_urls > 0:
+                logger.info(f"Resuming crawl for {domain}: {total_urls} URLs already crawled")
+            else:
+                logger.info(f"Resuming crawl for {domain}: 0 URLs already crawled")
         else:
             # Start fresh
             visited_sets[domain] = set()

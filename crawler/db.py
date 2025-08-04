@@ -37,6 +37,98 @@ def get_case_by_url(session, url):
         return None
     return session.query(CourtCase).filter(CourtCase.url == norm_url).first()
 
+def url_exists_in_db(url):
+    """Check if a URL already exists in the database"""
+    session = get_session()
+    try:
+        norm_url = normalize_url(url)
+        if not norm_url:
+            return False
+        case = session.query(CourtCase).filter(CourtCase.url == norm_url).first()
+        return case is not None
+    finally:
+        session.close()
+
+def get_existing_urls_for_domain(domain):
+    """Get all existing URLs for a domain from the database"""
+    session = get_session()
+    try:
+        # Get all URLs for the domain (with and without www prefix)
+        from urllib.parse import urlparse
+        
+        # Query for URLs containing the domain
+        cases = session.query(CourtCase).filter(
+            CourtCase.url.like(f'%{domain}%')
+        ).all()
+        
+        existing_urls = set()
+        for case in cases:
+            try:
+                parsed = urlparse(case.url)
+                case_domain = parsed.netloc
+                # Remove www prefix for comparison
+                if case_domain.startswith('www.'):
+                    case_domain = case_domain[4:]
+                
+                # Check if this case belongs to our target domain
+                if case_domain == domain or case_domain == domain.replace('www.', ''):
+                    existing_urls.add(case.url)
+            except:
+                continue
+        
+        return existing_urls
+    finally:
+        session.close()
+
+def get_domain_stats_from_db(domain):
+    """Get statistics for a domain from the database"""
+    session = get_session()
+    try:
+        from urllib.parse import urlparse
+        
+        # Get all cases for the domain
+        cases = session.query(CourtCase).filter(
+            CourtCase.url.like(f'%{domain}%')
+        ).all()
+        
+        total_urls = 0
+        successful_urls = 0
+        failed_urls = 0
+        status_codes = {}
+        
+        for case in cases:
+            try:
+                parsed = urlparse(case.url)
+                case_domain = parsed.netloc
+                # Remove www prefix for comparison
+                if case_domain.startswith('www.'):
+                    case_domain = case_domain[4:]
+                
+                # Check if this case belongs to our target domain
+                if case_domain == domain or case_domain == domain.replace('www.', ''):
+                    total_urls += 1
+                    if case.status_code == 200:
+                        successful_urls += 1
+                    else:
+                        failed_urls += 1
+                    
+                    # Track status codes
+                    if case.status_code not in status_codes:
+                        status_codes[case.status_code] = 0
+                    status_codes[case.status_code] += 1
+            except:
+                continue
+        
+        return {
+            'total_urls': total_urls,
+            'successful_urls': successful_urls,
+            'failed_urls': failed_urls,
+            'success_rate': (successful_urls / total_urls * 100) if total_urls > 0 else 0,
+            'status_codes': status_codes
+        }
+    finally:
+        session.close()
+
 def cleanup_duplicate_urls():
     """Clean up duplicate URLs in the database"""
     session = get_session()
