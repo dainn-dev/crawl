@@ -20,7 +20,7 @@ def main():
     print()
     
     # Configuration
-    max_depth = 2  # Adjust based on your needs
+    max_depth = 20  # Adjust based on your needs
     sites = TARGET_SITES[:2]  # Start with first 2 sites
     
     print(f"Configuration:")

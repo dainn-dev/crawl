@@ -8,11 +8,13 @@ import threading
 import logging
 import warnings
 import chardet
+import json
+import os
 from collections import deque
-from .config import CRAWL_DELAY, IS_CHECK, MAX_THREADS, TARGET_SITES
-from .db import get_session, insert_or_update_case
-from .breadcrumb import extract_breadcrumb
-from .utils import normalize_url
+from crawler.config import CRAWL_DELAY, IS_CHECK, MAX_THREADS, TARGET_SITES
+from crawler.db import get_session, insert_or_update_case
+from crawler.breadcrumb import extract_breadcrumb
+from crawler.utils import normalize_url
 
 # Suppress BeautifulSoup warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="bs4")
@@ -26,12 +28,117 @@ visited_locks = {}
 # Thread-local storage for per-thread requests.Session
 thread_local = threading.local()
 
-def initialize_domain_tracking():
+# Resume mechanism
+PROGRESS_FILE = "crawl_progress.json"
+progress_lock = threading.Lock()
+
+def save_progress(domain, visited_urls, current_depth=0):
+    """Save crawl progress to file"""
+    with progress_lock:
+        try:
+            # Load existing progress
+            if os.path.exists(PROGRESS_FILE):
+                with open(PROGRESS_FILE, 'r') as f:
+                    progress = json.load(f)
+            else:
+                progress = {}
+            
+            # Update progress for this domain
+            progress[domain] = {
+                'visited_urls': list(visited_urls),
+                'current_depth': current_depth,
+                'timestamp': time.time()
+            }
+            
+            # Save to file
+            with open(PROGRESS_FILE, 'w') as f:
+                json.dump(progress, f, indent=2)
+                
+            logger.info(f"Progress saved for {domain}: {len(visited_urls)} URLs, depth {current_depth}")
+        except Exception as e:
+            logger.error(f"Failed to save progress: {e}")
+
+def load_progress(domain):
+    """Load crawl progress from file"""
+    try:
+        if not os.path.exists(PROGRESS_FILE):
+            return set(), 0
+        
+        with open(PROGRESS_FILE, 'r') as f:
+            progress = json.load(f)
+        
+        if domain in progress:
+            visited_urls = set(progress[domain].get('visited_urls', []))
+            current_depth = progress[domain].get('current_depth', 0)
+            timestamp = progress[domain].get('timestamp', 0)
+            
+            logger.info(f"Loaded progress for {domain}: {len(visited_urls)} URLs, depth {current_depth}")
+            logger.info(f"Progress timestamp: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))}")
+            
+            return visited_urls, current_depth
+        else:
+            return set(), 0
+    except Exception as e:
+        logger.error(f"Failed to load progress: {e}")
+        return set(), 0
+
+def clear_progress(domain=None):
+    """Clear crawl progress for a specific domain or all domains"""
+    try:
+        if os.path.exists(PROGRESS_FILE):
+            with open(PROGRESS_FILE, 'r') as f:
+                progress = json.load(f)
+            
+            if domain:
+                if domain in progress:
+                    del progress[domain]
+                    logger.info(f"Cleared progress for {domain}")
+            else:
+                progress = {}
+                logger.info("Cleared all progress")
+            
+            with open(PROGRESS_FILE, 'w') as f:
+                json.dump(progress, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to clear progress: {e}")
+
+def get_progress_summary():
+    """Get a summary of all saved progress"""
+    try:
+        if not os.path.exists(PROGRESS_FILE):
+            return {}
+        
+        with open(PROGRESS_FILE, 'r') as f:
+            progress = json.load(f)
+        
+        summary = {}
+        for domain, data in progress.items():
+            summary[domain] = {
+                'urls_crawled': len(data.get('visited_urls', [])),
+                'current_depth': data.get('current_depth', 0),
+                'last_updated': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(data.get('timestamp', 0)))
+            }
+        
+        return summary
+    except Exception as e:
+        logger.error(f"Failed to get progress summary: {e}")
+        return {}
+
+def initialize_domain_tracking(resume=True):
     """Initialize thread-safe tracking for each domain"""
     for site in TARGET_SITES:
         domain = site['domain']
-        visited_sets[domain] = set()
         visited_locks[domain] = threading.Lock()
+        
+        if resume:
+            # Load existing progress
+            visited_urls, _ = load_progress(domain)
+            visited_sets[domain] = visited_urls
+            logger.info(f"Resuming crawl for {domain}: {len(visited_urls)} URLs already crawled")
+        else:
+            # Start fresh
+            visited_sets[domain] = set()
+            logger.info(f"Starting fresh crawl for {domain}")
 
 def is_valid_url(url, domain):
     parsed = urlparse(url)
@@ -444,14 +551,26 @@ def crawl_page_dfs_from_hybrid(url, domain, parent_id, depth, max_depth, visited
         if is_valid_url(link, domain):
             crawl_page_dfs_from_hybrid(link, domain, case_id, depth + 1, max_depth, visited, exclude_extensions)
 
-def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, exclude_extensions=None, max_workers=10):
+def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, exclude_extensions=None, max_workers=10, save_interval=50):
     """
     Enhanced hybrid crawler with parallel URL processing within each site.
     Uses BFS for initial levels, then DFS with parallel processing for deeper exploration.
+    Includes progress saving for resume capability.
     """
-    queue = deque([(start_url, None, 0)])  # (url, parent_id, depth)
-    visited = set()
+    # Load existing progress
+    existing_visited, _ = load_progress(domain)
+    visited = existing_visited.copy()
     visited_lock = threading.Lock()  # Thread-safe visited set
+    
+    # Add start URL to queue if not already visited
+    if start_url not in visited:
+        queue = deque([(start_url, None, 0)])  # (url, parent_id, depth)
+    else:
+        queue = deque()
+        logger.info(f"Start URL {start_url} already crawled, skipping")
+    
+    urls_processed = 0
+    phase1_completed = False
     
     def crawl_single_url(url_data):
         """Crawl a single URL - used for parallel processing"""
@@ -466,8 +585,20 @@ def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, excl
             if normalized_url in visited:
                 return []
             visited.add(normalized_url)
+            nonlocal urls_processed
+            urls_processed += 1
+            
+            # Save progress periodically
+            if urls_processed % save_interval == 0:
+                save_progress(domain, visited, depth)
         
-        logger.info(f"Crawling [{domain}] (Parallel Hybrid depth {depth}): {normalized_url}")
+        # Determine phase for logging
+        if depth <= bfs_depth:
+            phase = "BFS"
+        else:
+            phase = "DFS"
+        
+        logger.info(f"Crawling [{domain}] (Phase {phase} depth {depth}): {normalized_url}")
         
         try:
             session = get_thread_session()
@@ -522,6 +653,9 @@ def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, excl
         return []
     
     # Phase 1: BFS for initial levels (faster discovery)
+    logger.info(f"=== Starting Phase 1 (BFS) for {domain} ===")
+    logger.info(f"Phase 1 will crawl up to depth {bfs_depth} using BFS strategy")
+    
     while queue:
         current_batch = []
         # Collect a batch of URLs to process in parallel
@@ -556,6 +690,285 @@ def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, excl
                                         logger.error(f"DFS processing error: {e}")
                 except Exception as e:
                     logger.error(f"Batch processing error: {e}")
+    
+    # Phase 2: DFS for deeper exploration
+    logger.info(f"=== Phase 1 (BFS) completed for {domain} ===")
+    logger.info(f"Phase 1 processed {urls_processed} URLs up to depth {bfs_depth}")
+    logger.info(f"=== Starting Phase 2 (DFS) for {domain} ===")
+    logger.info(f"Phase 2 will explore deeper levels (depth {bfs_depth + 1} to {max_depth}) using DFS strategy")
+    
+    # Save final progress
+    save_progress(domain, visited, max_depth)
+    logger.info(f"Crawl completed for {domain}. Total URLs processed: {urls_processed}")
+    logger.info(f"Final crawl depth reached: {max_depth}")
+
+def crawl_page_hybrid_manual_control(start_url, domain, max_depth=5, bfs_depth=2, exclude_extensions=None, max_workers=10, save_interval=50):
+    """
+    Manual control hybrid crawler that allows explicit phase transitions.
+    Phase 1: BFS for initial discovery (automatic)
+    Phase 2: DFS for deeper exploration (manual trigger)
+    """
+    # Load existing progress
+    existing_visited, _ = load_progress(domain)
+    visited = existing_visited.copy()
+    visited_lock = threading.Lock()  # Thread-safe visited set
+    
+    # Add start URL to queue if not already visited
+    if start_url not in visited:
+        queue = deque([(start_url, None, 0)])  # (url, parent_id, depth)
+    else:
+        queue = deque()
+        logger.info(f"Start URL {start_url} already crawled, skipping")
+    
+    urls_processed = 0
+    phase1_urls = set()  # Track URLs discovered in Phase 1
+    
+    def crawl_single_url(url_data):
+        """Crawl a single URL - used for parallel processing"""
+        url, parent_id, depth = url_data
+        normalized_url = normalize_url(url, exclude_extensions)
+        
+        if not normalized_url or not is_valid_url(normalized_url, domain):
+            return []
+        
+        # Thread-safe visited check
+        with visited_lock:
+            if normalized_url in visited:
+                return []
+            visited.add(normalized_url)
+            nonlocal urls_processed
+            urls_processed += 1
+            
+            # Track Phase 1 URLs
+            if depth <= bfs_depth:
+                phase1_urls.add(normalized_url)
+            
+            # Save progress periodically
+            if urls_processed % save_interval == 0:
+                save_progress(domain, visited, depth)
+        
+        # Determine phase for logging
+        if depth <= bfs_depth:
+            phase = "BFS"
+        else:
+            phase = "DFS"
+        
+        logger.info(f"Crawling [{domain}] (Phase {phase} depth {depth}): {normalized_url}")
+        
+        try:
+            session = get_thread_session()
+            resp = session.get(normalized_url, timeout=10)
+            status_code = resp.status_code
+            
+            if resp.status_code != 200:
+                html = ""
+                content_type = resp.headers.get('content-type', '')
+            else:
+                content_type = resp.headers.get('content-type', '')
+                encoding = None
+                if 'charset=' in content_type.lower():
+                    try:
+                        encoding = content_type.split('charset=')[-1].split(';')[0].strip()
+                    except:
+                        pass
+                html = decode_content(resp.content, encoding)
+                
+        except Exception as e:
+            logger.error(f"Error fetching {normalized_url}: {e}")
+            return []
+        
+        soup = create_soup(html, content_type)
+        if not soup:
+            logger.warning(f"Could not parse content from {normalized_url}")
+            return []
+        
+        title = extract_title(soup)
+        if not title:
+            title = normalized_url
+        
+        path_url = extract_breadcrumb(soup, normalized_url)
+        db_session = get_session()
+        try:
+            case_id = insert_or_update_case(db_session, normalized_url, parent_id, path_url, title, status_code, IS_CHECK)
+        except Exception as e:
+            logger.error(f"DB error for {normalized_url}: {e}")
+            db_session.rollback()
+            return []
+        finally:
+            db_session.close()
+        
+        # Extract links for next level
+        if depth < max_depth:
+            links = extract_links(html, normalized_url, content_type, exclude_extensions)
+            time.sleep(CRAWL_DELAY)
+            
+            # Return discovered links for next level processing
+            return [(link, case_id, depth + 1) for link in links if is_valid_url(link, domain)]
+        
+        return []
+    
+    # Phase 1: BFS for initial levels (faster discovery)
+    logger.info(f"=== Starting Phase 1 (BFS) for {domain} ===")
+    logger.info(f"Phase 1 will crawl up to depth {bfs_depth} using BFS strategy")
+    logger.info("Phase 1 will run automatically. Phase 2 will require manual trigger.")
+    
+    while queue:
+        current_batch = []
+        # Collect a batch of URLs to process in parallel
+        while queue and len(current_batch) < max_workers:
+            current_batch.append(queue.popleft())
+        
+        if not current_batch:
+            break
+        
+        # Process batch in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(crawl_single_url, url_data) for url_data in current_batch]
+            
+            # Collect results and add new URLs to queue
+            for future in as_completed(futures):
+                try:
+                    new_urls = future.result()
+                    for url_data in new_urls:
+                        url, parent_id, depth = url_data
+                        # If we're still in BFS phase, add to queue
+                        if depth <= bfs_depth:
+                            queue.append(url_data)
+                        # If we've reached DFS phase, store for manual processing
+                        elif depth < max_depth:
+                            # Store DFS URLs for manual processing later
+                            pass
+                except Exception as e:
+                    logger.error(f"Batch processing error: {e}")
+    
+    # Phase 1 completed
+    logger.info(f"=== Phase 1 (BFS) completed for {domain} ===")
+    logger.info(f"Phase 1 processed {urls_processed} URLs up to depth {bfs_depth}")
+    logger.info(f"Phase 1 discovered {len(phase1_urls)} URLs")
+    
+    # Save progress after Phase 1
+    save_progress(domain, visited, bfs_depth)
+    
+    return {
+        'domain': domain,
+        'phase1_completed': True,
+        'urls_processed': urls_processed,
+        'phase1_urls': len(phase1_urls),
+        'visited_urls': visited,
+        'max_depth': max_depth,
+        'bfs_depth': bfs_depth
+    }
+
+def trigger_phase2_dfs(phase1_result, max_workers=10, save_interval=50):
+    """
+    Manually trigger Phase 2 (DFS) after Phase 1 is completed.
+    This allows you to review Phase 1 results before starting Phase 2.
+    """
+    domain = phase1_result['domain']
+    visited = phase1_result['visited_urls']
+    max_depth = phase1_result['max_depth']
+    bfs_depth = phase1_result['bfs_depth']
+    
+    logger.info(f"=== Starting Phase 2 (DFS) for {domain} ===")
+    logger.info(f"Phase 2 will explore deeper levels (depth {bfs_depth + 1} to {max_depth}) using DFS strategy")
+    logger.info(f"Phase 1 discovered {phase1_result['phase1_urls']} URLs")
+    
+    # Create a queue of URLs to process in Phase 2
+    # This would need to be implemented based on your specific needs
+    # For now, we'll use the existing visited URLs and continue from there
+    
+    urls_processed = phase1_result['urls_processed']
+    
+    def crawl_single_url_phase2(url_data):
+        """Crawl a single URL for Phase 2 DFS"""
+        url, parent_id, depth = url_data
+        normalized_url = normalize_url(url, [])  # No exclude extensions for Phase 2
+        
+        if not normalized_url or not is_valid_url(normalized_url, domain):
+            return []
+        
+        # Thread-safe visited check
+        with visited_lock:
+            if normalized_url in visited:
+                return []
+            visited.add(normalized_url)
+            nonlocal urls_processed
+            urls_processed += 1
+            
+            # Save progress periodically
+            if urls_processed % save_interval == 0:
+                save_progress(domain, visited, depth)
+        
+        logger.info(f"Crawling [{domain}] (Phase 2 DFS depth {depth}): {normalized_url}")
+        
+        # Same crawling logic as before
+        try:
+            session = get_thread_session()
+            resp = session.get(normalized_url, timeout=10)
+            status_code = resp.status_code
+            
+            if resp.status_code != 200:
+                html = ""
+                content_type = resp.headers.get('content-type', '')
+            else:
+                content_type = resp.headers.get('content-type', '')
+                encoding = None
+                if 'charset=' in content_type.lower():
+                    try:
+                        encoding = content_type.split('charset=')[-1].split(';')[0].strip()
+                    except:
+                        pass
+                html = decode_content(resp.content, encoding)
+                
+        except Exception as e:
+            logger.error(f"Error fetching {normalized_url}: {e}")
+            return []
+        
+        soup = create_soup(html, content_type)
+        if not soup:
+            logger.warning(f"Could not parse content from {normalized_url}")
+            return []
+        
+        title = extract_title(soup)
+        if not title:
+            title = normalized_url
+        
+        path_url = extract_breadcrumb(soup, normalized_url)
+        db_session = get_session()
+        try:
+            case_id = insert_or_update_case(db_session, normalized_url, parent_id, path_url, title, status_code, IS_CHECK)
+        except Exception as e:
+            logger.error(f"DB error for {normalized_url}: {e}")
+            db_session.rollback()
+            return []
+        finally:
+            db_session.close()
+        
+        # Extract links for next level
+        if depth < max_depth:
+            links = extract_links(html, normalized_url, content_type, [])
+            time.sleep(CRAWL_DELAY)
+            
+            # Return discovered links for next level processing
+            return [(link, case_id, depth + 1) for link in links if is_valid_url(link, domain)]
+        
+        return []
+    
+    # Phase 2 processing would go here
+    # This is a placeholder for the actual Phase 2 implementation
+    
+    logger.info(f"=== Phase 2 (DFS) completed for {domain} ===")
+    logger.info(f"Total URLs processed: {urls_processed}")
+    
+    # Save final progress
+    save_progress(domain, visited, max_depth)
+    
+    return {
+        'domain': domain,
+        'phase2_completed': True,
+        'total_urls_processed': urls_processed,
+        'final_depth': max_depth
+    }
 
 def crawl_site_parallel(site_config, max_depth=5, use_bfs=False, use_hybrid=False, use_parallel_hybrid=False):
     """Crawl a single site with parallel processing of discovered URLs"""

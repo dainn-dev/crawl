@@ -1,5 +1,26 @@
+#!/usr/bin/env python3
+"""
+Performance Test for Web Crawler Strategies
+==========================================
+
+This script compares the performance of different crawling strategies:
+- Parallel Hybrid (Fastest)
+- Hybrid (Recommended)
+- BFS (Wide Discovery)
+- DFS (Deep Exploration)
+
+Usage:
+    python performance_test.py
+"""
+
 import time
 import logging
+import sys
+import os
+
+# Add the current directory to Python path so we can import crawler modules
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from crawler.crawler import (
     start_crawl_dfs, 
     start_crawl_bfs, 
@@ -20,7 +41,7 @@ def performance_test():
     print()
     
     # Test parameters
-    max_depth = 2  # Shallow depth for quick testing
+    max_depth = 1  # Shallow depth for quick testing
     test_sites = TARGET_SITES[:1]  # Test with just one site
     
     print(f"Test configuration:")
@@ -73,8 +94,8 @@ def performance_test():
     
     # Print performance summary
     print("=== Performance Summary ===")
-    print(f"{'Strategy':<10} {'Duration':<12} {'Status':<10}")
-    print("-" * 35)
+    print(f"{'Strategy':<15} {'Duration':<12} {'Status':<10}")
+    print("-" * 40)
     
     fastest_strategy = None
     fastest_time = float('inf')
@@ -82,7 +103,7 @@ def performance_test():
     for strategy_name, result in results.items():
         duration = result['duration']
         status = result['status']
-        print(f"{strategy_name:<10} {duration:<12.2f} {status:<10}")
+        print(f"{strategy_name:<15} {duration:<12.2f} {status:<10}")
         
         if status == 'success' and duration < fastest_time:
             fastest_time = duration
@@ -114,13 +135,13 @@ def quick_hybrid_test():
     setup_logging()
     logger = logging.getLogger(__name__)
     
-    print("=== Quick Hybrid Crawler Test ===")
+    print("=== Quick Parallel Hybrid Crawler Test ===")
     
     # Test with minimal parameters
     max_depth = 1
     test_sites = TARGET_SITES[:1]
     
-    print(f"Testing hybrid crawler with depth {max_depth}")
+    print(f"Testing parallel hybrid crawler with depth {max_depth}")
     print(f"Target: {test_sites[0]['name']}")
     print()
     
@@ -128,15 +149,18 @@ def quick_hybrid_test():
     
     start_time = time.time()
     try:
-        start_crawl_hybrid(max_depth=max_depth, sites=test_sites)
+        start_crawl_hybrid_parallel(max_depth=max_depth, sites=test_sites)
         end_time = time.time()
         duration = end_time - start_time
-        print(f"✅ Hybrid crawler completed in {duration:.2f} seconds")
+        print(f"✅ Parallel Hybrid crawler completed in {duration:.2f} seconds")
         print("🎉 Ready for production use!")
     except Exception as e:
-        print(f"❌ Hybrid crawler failed: {e}")
+        print(f"❌ Parallel Hybrid crawler failed: {e}")
 
 if __name__ == "__main__":
-    # Uncomment one of these to run:
-    # performance_test()  # Full performance comparison
-    quick_hybrid_test()  # Quick test of hybrid crawler 
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "quick":
+        quick_hybrid_test()
+    else:
+        performance_test() 

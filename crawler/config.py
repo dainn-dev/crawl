@@ -16,17 +16,17 @@ MAX_THREADS = int(os.getenv('MAX_THREADS', 5))  # Number of threads for crawling
 # Target websites configuration
 TARGET_SITES = [
     {
-        'domain': 'eur-lex.europa.eu',
-        'start_url': 'https://eur-lex.europa.eu/homepage.html?locale=en',
-        'name': 'EUR-Lex',
-        'exclude_extensions': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar', '.tar', '.gz']
-    },
-    {
         'domain': 'cylaw.org',
         'start_url': 'https://cylaw.org',
         'name': 'CyLaw',
         'exclude_extensions': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar', '.tar', '.gz']
     },
+    {
+        'domain': 'eur-lex.europa.eu',
+        'start_url': 'https://eur-lex.europa.eu/homepage.html?locale=en',
+        'name': 'EUR-Lex',
+        'exclude_extensions': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar', '.tar', '.gz']
+    },    
     {
         'domain': 'hudoc.echr.coe.int',
         'start_url': 'https://hudoc.echr.coe.int',
