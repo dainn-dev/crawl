@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+lxml
+chardet
+psycopg2-binary
+SQLAlchemy
+python-dotenv 
