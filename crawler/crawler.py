@@ -14,8 +14,7 @@ from collections import deque
 from crawler.config import CRAWL_DELAY, IS_CHECK, MAX_THREADS, TARGET_SITES
 from crawler.db import get_session, insert_or_update_case
 from crawler.breadcrumb import extract_breadcrumb
-from crawler.utils import normalize_url, should_skip_url
-from crawler.speed_monitor import get_speed_monitor
+from crawler.utils import normalize_url
 
 # Suppress BeautifulSoup warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="bs4")
@@ -126,32 +125,16 @@ def get_progress_summary():
         return {}
 
 def initialize_domain_tracking(resume=True):
-    """Initialize domain tracking with thread-safe visited sets"""
-    global visited_sets, visited_locks
-    
-    visited_sets = {}
-    visited_locks = {}
-    
-    for site_config in TARGET_SITES:
-        domain = site_config['domain']
-        visited_sets[domain] = set()
+    """Initialize thread-safe tracking for each domain"""
+    for site in TARGET_SITES:
+        domain = site['domain']
         visited_locks[domain] = threading.Lock()
         
         if resume:
-            # Load existing progress from file
-            existing_visited, _ = load_progress(domain)
-            visited_sets[domain].update(existing_visited)
-            
-            # Also load existing URLs from database
-            from crawler.db import get_existing_urls_for_domain
-            db_urls = get_existing_urls_for_domain(domain)
-            visited_sets[domain].update(db_urls)
-            
-            total_urls = len(visited_sets[domain])
-            if total_urls > 0:
-                logger.info(f"Resuming crawl for {domain}: {total_urls} URLs already crawled")
-            else:
-                logger.info(f"Resuming crawl for {domain}: 0 URLs already crawled")
+            # Load existing progress
+            visited_urls, _ = load_progress(domain)
+            visited_sets[domain] = visited_urls
+            logger.info(f"Resuming crawl for {domain}: {len(visited_urls)} URLs already crawled")
         else:
             # Start fresh
             visited_sets[domain] = set()
@@ -291,18 +274,10 @@ def crawl_page(url, domain, parent_id=None, depth=0, max_depth=5, exclude_extens
         visited_sets[domain].add(normalized_url)
     
     logger.info(f"Crawling [{domain}] (DFS depth {depth}): {normalized_url}")
-    
-    # Speed monitoring
-    speed_monitor = get_speed_monitor()
-    start_time = time.time()
-    success = False
-    status_code = 0
-    
     try:
         session = get_thread_session()
         resp = session.get(normalized_url, timeout=10)
         status_code = resp.status_code
-        success = resp.status_code == 200
         
         if resp.status_code != 200:
             html = ""
@@ -324,14 +299,7 @@ def crawl_page(url, domain, parent_id=None, depth=0, max_depth=5, exclude_extens
             
     except Exception as e:
         logger.error(f"Error fetching {normalized_url}: {e}")
-        # Record failed URL
-        response_time = time.time() - start_time
-        speed_monitor.record_url(normalized_url, domain, status_code, response_time, success=False)
         return
-    
-    # Record successful URL with timing
-    response_time = time.time() - start_time
-    speed_monitor.record_url(normalized_url, domain, status_code, response_time, success)
     
     # Create soup with appropriate parser
     soup = create_soup(html, content_type)
@@ -439,7 +407,7 @@ def crawl_page_bfs(start_url, domain, max_depth=5, exclude_extensions=None):
                 if is_valid_url(link, domain):
                     queue.append((link, case_id, depth + 1))
 
-def crawl_page_hybrid(start_url, domain, max_depth=5, bfs_depth=2, exclude_extensions=None):
+def crawl_page_hybrid(start_url, domain, max_depth=5, bfs_depth=5, exclude_extensions=None):
     """
     Hybrid crawler that uses BFS for initial levels and DFS for deeper exploration.
     This approach discovers more URLs quickly with BFS, then explores them thoroughly with DFS.
@@ -632,17 +600,10 @@ def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, excl
         
         logger.info(f"Crawling [{domain}] (Phase {phase} depth {depth}): {normalized_url}")
         
-        # Speed monitoring
-        speed_monitor = get_speed_monitor()
-        start_time = time.time()
-        success = False
-        status_code = 0
-        
         try:
             session = get_thread_session()
             resp = session.get(normalized_url, timeout=10)
             status_code = resp.status_code
-            success = resp.status_code == 200
             
             if resp.status_code != 200:
                 html = ""
@@ -659,14 +620,7 @@ def crawl_page_hybrid_parallel(start_url, domain, max_depth=5, bfs_depth=2, excl
                 
         except Exception as e:
             logger.error(f"Error fetching {normalized_url}: {e}")
-            # Record failed URL
-            response_time = time.time() - start_time
-            speed_monitor.record_url(normalized_url, domain, status_code, response_time, success=False)
             return []
-        
-        # Record successful URL with timing
-        response_time = time.time() - start_time
-        speed_monitor.record_url(normalized_url, domain, status_code, response_time, success)
         
         soup = create_soup(html, content_type)
         if not soup:
@@ -1104,54 +1058,29 @@ def start_crawl_hybrid(max_depth=5, sites=None):
     logger.info(f"Multi-site Hybrid crawl completed")
 
 def start_crawl_hybrid_parallel(max_depth=5, sites=None):
-    """Start enhanced parallel hybrid crawl with speed monitoring"""
+    """Start crawling using enhanced parallel hybrid approach (BFS + DFS with URL-level parallelism)"""
+    initialize_domain_tracking()
+    
     if sites is None:
         sites = TARGET_SITES
+    logger.info(f"Starting multi-site Parallel Hybrid crawl with {MAX_THREADS} threads")
+    logger.info(f"Target sites: {[site['name'] for site in sites]}")
     
-    logger.info(f"Starting enhanced parallel hybrid crawl with depth {max_depth}")
-    
-    # Initialize domain tracking
-    initialize_domain_tracking(resume=True)
-    
-    # Speed monitoring
-    speed_monitor = get_speed_monitor()
-    last_speed_report = time.time()
-    speed_report_interval = 300  # Report every 5 minutes
-    
-    def print_speed_update():
-        """Print periodic speed update"""
-        nonlocal last_speed_report
-        current_time = time.time()
-        if current_time - last_speed_report >= speed_report_interval:
-            stats = speed_monitor.get_speed_stats(1)  # Last hour
-            logger.info(f"Speed Update: {stats['urls_per_hour']:.1f} URLs/hour | "
-                       f"Total: {stats['total_urls']:,} | "
-                       f"Success Rate: {stats['success_rate']:.1f}%")
-            last_speed_report = current_time
-    
-    # Start crawling each site in parallel
-    with ThreadPoolExecutor(max_workers=len(sites)) as executor:
-        futures = []
-        for site_config in sites:
-            future = executor.submit(crawl_site_parallel, site_config, max_depth, 
-                                   use_parallel_hybrid=True)
-            futures.append(future)
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        # Submit each site to be crawled in its own thread with parallel URL processing
+        futures = [
+            executor.submit(crawl_site_parallel, site, max_depth, use_bfs=False, use_hybrid=False, use_parallel_hybrid=True) 
+            for site in sites
+        ]
         
-        # Monitor progress and print speed updates
-        try:
-            for future in as_completed(futures):
-                print_speed_update()
-                future.result()  # This will raise any exceptions
-        except KeyboardInterrupt:
-            logger.info("Crawl interrupted by user")
-            # Cancel remaining futures
-            for future in futures:
-                future.cancel()
-            raise
+        # Wait for all sites to complete
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"Thread execution error: {e}")
     
-    # Final speed report
-    speed_monitor.print_speed_report(1)
-    logger.info("Enhanced parallel hybrid crawl completed!")
+    logger.info(f"Multi-site Parallel Hybrid crawl completed")
 
 # Convenience functions for specific traversal methods
 def start_crawl_dfs(max_depth=5, sites=None):

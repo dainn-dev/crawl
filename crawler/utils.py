@@ -7,7 +7,7 @@ DEFAULT_EXCLUDE_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', 
 
 def normalize_url(url, exclude_extensions=None):
     """
-    Normalize a URL by removing fragments, normalizing domain, and skipping non-HTML file types.
+    Normalize a URL by removing fragments and skipping non-HTML file types.
     Returns None if the URL should be skipped.
     
     Args:
@@ -18,25 +18,17 @@ def normalize_url(url, exclude_extensions=None):
         exclude_extensions = DEFAULT_EXCLUDE_EXTENSIONS
         
     parsed = urlparse(url)
-    
-    # Normalize domain (remove www prefix)
-    netloc = parsed.netloc
-    if netloc.startswith('www.'):
-        netloc = netloc[4:]  # Remove 'www.' prefix
-    
     # Remove fragment
     parsed = parsed._replace(fragment='')
-    
+    # Optionally, sort or remove query params here if needed
     # Remove trailing slash for consistency
     path = parsed.path.rstrip('/')
-    
     # Skip non-HTML file types
     for ext in exclude_extensions:
         if path.lower().endswith(ext):
             return None
-    
-    # Rebuild the URL with normalized domain and without fragment
-    normalized = urlunparse(parsed._replace(netloc=netloc, path=path))
+    # Rebuild the URL without fragment
+    normalized = urlunparse(parsed._replace(path=path))
     return normalized
 
 def should_skip_url(url, exclude_extensions=None):

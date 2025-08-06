@@ -1,7 +1,9 @@
-requests
-beautifulsoup4
+requests~=2.31.0
+beautifulsoup4~=4.12.3
 lxml
-chardet
+chardet~=5.2.0
 psycopg2-binary
-SQLAlchemy
-python-dotenv 
+SQLAlchemy~=2.0.27
+python-dotenv~=1.0.1
+selenium~=4.18.1
+webdriver-manager~=4.0.1
