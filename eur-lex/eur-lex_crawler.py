@@ -16,22 +16,48 @@ from crawler.config import IS_CHECK
 
 def setup_webdriver(headless=True):
     """
-    Set up Chrome WebDriver with proper options and error handling
+    Set up Chrome WebDriver with proper options and error handling for Linux
     
     Args:
         headless (bool): If True, runs browser in headless mode (no visible window)
     """
     try:
-        # Configure Chrome options
+        # Configure Chrome options optimized for Linux
         chrome_options = Options()
+        
+        # Essential Linux options
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-software-rasterizer")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-plugins")
+        chrome_options.add_argument("--disable-images")  # Faster loading
+        chrome_options.add_argument("--disable-javascript")  # Uncomment if JS not needed
+        chrome_options.add_argument("--disable-web-security")
+        chrome_options.add_argument("--allow-running-insecure-content")
+        chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+        
+        # Memory and performance optimizations
+        chrome_options.add_argument("--memory-pressure-off")
+        chrome_options.add_argument("--max_old_space_size=4096")
+        chrome_options.add_argument("--disable-background-timer-throttling")
+        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+        chrome_options.add_argument("--disable-renderer-backgrounding")
+        
+        # Window settings
         chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--start-maximized")
+        
+        # User agent to avoid detection
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         # Enable headless mode if requested
         if headless:
-            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--headless=new")  # Use new headless mode
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
             print("Running in headless mode (no browser window will be visible)")
         else:
             print("Running with visible browser window")
@@ -40,6 +66,10 @@ def setup_webdriver(headless=True):
         try:
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Additional setup for Linux
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
             print("ChromeDriver set up successfully with ChromeDriverManager")
             return driver
         except Exception as e:
@@ -48,11 +78,26 @@ def setup_webdriver(headless=True):
             # Fallback: try to use system Chrome driver
             try:
                 driver = webdriver.Chrome(options=chrome_options)
+                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
                 print("Using system ChromeDriver")
                 return driver
             except Exception as e2:
                 print(f"System ChromeDriver also failed: {e2}")
-                raise Exception("Could not set up Chrome WebDriver. Please ensure Chrome browser is installed.")
+                
+                # Final fallback: try with minimal options
+                try:
+                    minimal_options = Options()
+                    minimal_options.add_argument("--no-sandbox")
+                    minimal_options.add_argument("--disable-dev-shm-usage")
+                    if headless:
+                        minimal_options.add_argument("--headless=new")
+                    
+                    driver = webdriver.Chrome(options=minimal_options)
+                    print("Using minimal ChromeDriver setup")
+                    return driver
+                except Exception as e3:
+                    print(f"Minimal setup also failed: {e3}")
+                    raise Exception("Could not set up Chrome WebDriver. Please ensure Chrome browser is installed on Linux.")
                 
     except Exception as e:
         print(f"Failed to set up WebDriver: {e}")
