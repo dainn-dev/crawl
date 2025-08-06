@@ -37,7 +37,7 @@ TARGET_SITES = [
         'domain': 'curia.europa.eu',
         'start_url': 'https://curia.europa.eu/jcms/jcms/j_6/en/',
         'name': 'Curia',
-        'exclude_extensions': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar', '.tar', '.gz']
+        'exclude_extensions': ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar', '.tar', '.gz']
     },
     {
         'domain': 'www.bailii.org',

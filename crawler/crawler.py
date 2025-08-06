@@ -407,7 +407,7 @@ def crawl_page_bfs(start_url, domain, max_depth=5, exclude_extensions=None):
                 if is_valid_url(link, domain):
                     queue.append((link, case_id, depth + 1))
 
-def crawl_page_hybrid(start_url, domain, max_depth=5, bfs_depth=5, exclude_extensions=None):
+def crawl_page_hybrid(start_url, domain, max_depth=10, bfs_depth=5, exclude_extensions=None):
     """
     Hybrid crawler that uses BFS for initial levels and DFS for deeper exploration.
     This approach discovers more URLs quickly with BFS, then explores them thoroughly with DFS.
