@@ -1,0 +1,5 @@
+playwright==1.40.0
+# Use pre-compiled wheels to avoid compilation issues
+greenlet==3.0.1; platform_system == "Windows"
+asyncio
+typing 

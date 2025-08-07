@@ -1,0 +1,45 @@
+{
+  "extraction_timestamp": "2025-08-07 17:10:52",
+  "total_items": 4,
+  "high_value_triggers": [
+    {
+      "text": "Russia (10311)",
+      "element_id": "RUS",
+      "value": 10311
+    }
+  ],
+  "importance_items": [
+    {
+      "index": 0,
+      "text": "Key cases (2772)",
+      "element_id": "1",
+      "class": "refinement-line ",
+      "checked": false,
+      "value": ""
+    },
+    {
+      "index": 1,
+      "text": "1 (2588)",
+      "element_id": "2",
+      "class": "refinement-line ",
+      "checked": false,
+      "value": ""
+    },
+    {
+      "index": 2,
+      "text": "2 (9919)",
+      "element_id": "3",
+      "class": "refinement-line ",
+      "checked": false,
+      "value": ""
+    },
+    {
+      "index": 3,
+      "text": "3 (77158)",
+      "element_id": "4",
+      "class": "refinement-line ",
+      "checked": false,
+      "value": ""
+    }
+  ]
+}
